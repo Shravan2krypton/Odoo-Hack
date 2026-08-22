@@ -3,21 +3,26 @@ include 'includes/db_connect.php';
 session_start();
 
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    $first_name = trim($_POST['first_name']);
-    $last_name  = trim($_POST['last_name']);
-    $email      = trim($_POST['email']);
-    $phone      = trim($_POST['phone']);
-    $city       = trim($_POST['city']);
-    $country    = trim($_POST['country']);
-    $extra_info = trim($_POST['extra_info']);
-    $password   = $_POST['password'];
+    $first_name  = trim($_POST['first_name']);
+    $last_name   = trim($_POST['last_name']);
+    $email       = trim($_POST['email']);
+    $phone_code  = trim($_POST['phone_code']);   // from dropdown
+    $phone_number= trim($_POST['phone_number']); // 10 digits
+    $country_id  = intval($_POST['country_id']);
+    $city_id     = intval($_POST['city_id']);
+    $extra_info  = trim($_POST['extra_info']);
+    $password    = $_POST['password'];
 
     // Validation
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $error = "Invalid email format.";
     } elseif (strlen($password) < 8) {
         $error = "Password must be at least 8 characters.";
+    } elseif (!preg_match('/^\d{10}$/', $phone_number)) {
+        $error = "Phone number must be exactly 10 digits.";
     } else {
+        $phone = '+' . $phone_code . $phone_number; // final stored value
+
         // Check if email exists
         $sql = "SELECT id FROM users WHERE email=?";
         $stmt = $conn->prepare($sql);
@@ -31,10 +36,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $password_hash = password_hash($password, PASSWORD_DEFAULT);
 
             $sql = "INSERT INTO users 
-                (first_name, last_name, email, phone, city, country, extra_info, password_hash) 
+                (first_name, last_name, email, phone, country_id, city_id, extra_info, password_hash) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
             $stmt = $conn->prepare($sql);
-            $stmt->bind_param("ssssssss", $first_name, $last_name, $email, $phone, $city, $country, $extra_info, $password_hash);
+            $stmt->bind_param("ssssiiis", $first_name, $last_name, $email, $phone, $country_id, $city_id, $extra_info, $password_hash);
 
             if ($stmt->execute()) {
                 header("Location: login.php?registered=1");
@@ -45,12 +50,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
     }
 }
+
+// Fetch countries for dropdown
+$sql = "SELECT id, name, phone_code FROM country ORDER BY name ASC";
+$countries = $conn->query($sql);
 ?>
 <!DOCTYPE html>
 <html>
 <head>
     <title>Register</title>
     <link rel="stylesheet" href="assets/css/style.css">
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 </head>
 <body>
     <form method="POST" action="">
@@ -58,13 +68,55 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         <input type="text" name="first_name" placeholder="First Name" required><br>
         <input type="text" name="last_name" placeholder="Last Name" required><br>
         <input type="email" name="email" placeholder="Email Address" required><br>
-        <input type="text" name="phone" placeholder="Phone Number"><br>
-        <input type="text" name="city" placeholder="City"><br>
-        <input type="text" name="country" placeholder="Country"><br>
+
+        <label>Country:</label>
+        <select name="country_id" id="country" required>
+            <option value="">-- Select Country --</option>
+            <?php while($row = $countries->fetch_assoc()) { ?>
+                <option value="<?php echo $row['id']; ?>" data-code="<?php echo $row['phone_code']; ?>">
+                    <?php echo $row['name']; ?> (+<?php echo $row['phone_code']; ?>)
+                </option>
+            <?php } ?>
+        </select><br>
+
+        <label>City:</label>
+        <select name="city_id" id="city" required>
+            <option value="">-- Select City --</option>
+        </select><br>
+
+        <label>Phone:</label>
+        <div style="display:flex; gap:5px;">
+            <input type="text" id="phone_code" name="phone_code" placeholder="Code" readonly style="width:60px;">
+            <input type="text" id="phone_number" name="phone_number" placeholder="10 digits" maxlength="10" pattern="\d{10}" required>
+        </div><br>
+
         <textarea name="extra_info" placeholder="Additional Information..."></textarea><br>
         <input type="password" name="password" placeholder="Password" required><br>
         <button type="submit">Register</button>
         <p><?php if(isset($error)) echo $error; ?></p>
     </form>
+
+    <script>
+    // Load cities dynamically
+    $('#country').change(function() {
+        var countryId = $(this).val();
+        var phoneCode = $('#country option:selected').data('code');
+        if(phoneCode) {
+            $('#phone_code').val(phoneCode); // auto-fill code box
+        }
+        if(countryId) {
+            $.ajax({
+                url: 'get_cities.php',
+                type: 'POST',
+                data: {country_id: countryId},
+                success: function(data) {
+                    $('#city').html(data);
+                }
+            });
+        } else {
+            $('#city').html('<option value="">-- Select City --</option>');
+        }
+    });
+    </script>
 </body>
 </html>

@@ -10,9 +10,14 @@ if (!isset($_SESSION['user_id'])) {
 
 $user_id = $_SESSION['user_id'];
 
-// Fetch user details
-$sqlUser = "SELECT first_name, last_name, email, phone, city, country, extra_info, role 
-            FROM users WHERE id=?";
+// Fetch user details with joins for city/country names
+$sqlUser = "SELECT u.first_name, u.last_name, u.email, u.phone, 
+                   c.name AS country_name, ci.name AS city_name, 
+                   u.extra_info, u.role
+            FROM users u
+            LEFT JOIN country c ON u.country_id = c.id
+            LEFT JOIN city ci ON u.city_id = ci.id
+            WHERE u.id=?";
 $stmtUser = $conn->prepare($sqlUser);
 $stmtUser->bind_param("i", $user_id);
 $stmtUser->execute();
@@ -20,14 +25,17 @@ $user = $stmtUser->get_result()->fetch_assoc();
 
 // Fetch trips by status
 function fetchTrips($conn, $user_id, $status) {
-    $sql = "SELECT id, name, start_date, end_date FROM trips WHERE user_id=? AND status=? ORDER BY start_date DESC";
+    $sql = "SELECT id, name, start_date, end_date 
+            FROM trips 
+            WHERE user_id=? AND status=? 
+            ORDER BY start_date DESC";
     $stmt = $conn->prepare($sql);
     $stmt->bind_param("is", $user_id, $status);
     $stmt->execute();
     return $stmt->get_result();
 }
-$plannedTrips = fetchTrips($conn, $user_id, 'planned');
-$ongoingTrips = fetchTrips($conn, $user_id, 'ongoing');
+$plannedTrips   = fetchTrips($conn, $user_id, 'planned');
+$ongoingTrips   = fetchTrips($conn, $user_id, 'ongoing');
 $completedTrips = fetchTrips($conn, $user_id, 'completed');
 ?>
 <!DOCTYPE html>
@@ -44,8 +52,8 @@ $completedTrips = fetchTrips($conn, $user_id, 'completed');
             <h2><?php echo $user['first_name']." ".$user['last_name']; ?></h2>
             <p>Email: <?php echo $user['email']; ?></p>
             <p>Phone: <?php echo $user['phone']; ?></p>
-            <p>City: <?php echo $user['city']; ?></p>
-            <p>Country: <?php echo $user['country']; ?></p>
+            <p>City: <?php echo $user['city_name'] ?: 'N/A'; ?></p>
+            <p>Country: <?php echo $user['country_name'] ?: 'N/A'; ?></p>
             <p>Info: <?php echo $user['extra_info']; ?></p>
             <a href="edit_profile.php">Edit Profile</a>
         </div>
