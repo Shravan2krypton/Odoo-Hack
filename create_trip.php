@@ -1,382 +1,194 @@
 <?php
-include 'includes/db_connect.php';
-session_start();
+require_once 'includes/auth_guard.php';
+require_once 'includes/db_connect.php';
 
-// Protect page
-if (!isset($_SESSION['user_id'])) {
-    header("Location: login.php?auth=required");
-    exit();
-}
+$userId = require_auth();
 
-$user_id = $_SESSION['user_id'];
-$message = "";
+$message = '';
+$preselectedCityId = isset($_GET['city_id']) ? intval($_GET['city_id']) : null;
 
-// Handle form submission
+// Handle Form Submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $name       = trim($_POST['name']);
-    $country_id = intval($_POST['country_id']);
-    $city_id    = intval($_POST['city_id']);
-    $start_date = $_POST['start_date'];
-    $end_date   = $_POST['end_date'];
-    $notes      = trim($_POST['notes']);
+    $name         = trim($_POST['name'] ?? '');
+    $country_id   = !empty($_POST['country_id']) ? intval($_POST['country_id']) : 1;
+    $city_id      = !empty($_POST['city_id']) ? intval($_POST['city_id']) : null;
+    $start_date   = $_POST['start_date'] ?? '';
+    $end_date     = $_POST['end_date'] ?? '';
+    $total_budget = !empty($_POST['total_budget']) ? floatval($_POST['total_budget']) : 0.00;
+    $description  = trim($_POST['description'] ?? '');
+    $notes        = trim($_POST['notes'] ?? '');
+    $cover_photo  = trim($_POST['cover_photo'] ?? '');
 
-    if (!empty($name) && $country_id && $city_id && !empty($start_date) && !empty($end_date)) {
-        $sql = "INSERT INTO trips (user_id, name, country_id, city_id, start_date, end_date, notes, status) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'planned')";
+    if (empty($name) || empty($start_date) || empty($end_date)) {
+        $message = "Trip name and travel dates are required.";
+    } elseif ($start_date > $end_date) {
+        $message = "End date cannot be earlier than start date.";
+    } else {
+        // If no cover photo provided, fetch default from destination city
+        if (empty($cover_photo) && $city_id) {
+            $cityImgQuery = $conn->query("SELECT image_url FROM cities WHERE id = {$city_id}");
+            if ($cityRow = $cityImgQuery->fetch_assoc()) {
+                $cover_photo = $cityRow['image_url'];
+            }
+        }
+        if (empty($cover_photo)) {
+            $cover_photo = 'https://images.unsplash.com/photo-1599661046289-e31897846e41?w=800';
+        }
+
+        // Generate unique share slug
+        $slugBase = strtolower(trim(preg_replace('/[^A-Za-z0-9-]+/', '-', $name)));
+        $share_slug = $slugBase . '-' . substr(md5(uniqid()), 0, 6);
+
+        $sql = "INSERT INTO trips 
+            (user_id, country_id, city_id, name, description, notes, start_date, end_date, cover_photo, total_budget, status, is_public, share_slug) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', 1, ?)";
+        
         $stmt = $conn->prepare($sql);
-        $stmt->bind_param("isiisss", $user_id, $name, $country_id, $city_id, $start_date, $end_date, $notes);
+        $stmt->bind_param("iiissssssds", $userId, $country_id, $city_id, $name, $description, $notes, $start_date, $end_date, $cover_photo, $total_budget, $share_slug);
 
         if ($stmt->execute()) {
-            // Log action
-            $log = $conn->prepare("INSERT INTO audit_logs (user_id, action, table_name, record_id) VALUES (?, 'INSERT', 'trips', ?)");
-            $log->bind_param("ii", $user_id, $stmt->insert_id);
-            $log->execute();
+            $newTripId = $stmt->insert_id;
 
-            $message = "Trip created successfully!";
+            // Automatically create initial stop in itinerary_sections if city is chosen
+            if ($city_id) {
+                $cityInfo = $conn->query("SELECT name FROM cities WHERE id = {$city_id}")->fetch_assoc();
+                $cityName = $cityInfo['name'] ?? 'Stop 1';
+                $stopStmt = $conn->prepare("INSERT INTO itinerary_sections (trip_id, city_id, section_name, start_date, end_date, budget, order_index) VALUES (?, ?, ?, ?, ?, ?, 1)");
+                $stopStmt->bind_param("iisssd", $newTripId, $city_id, $cityName, $start_date, $end_date, $total_budget);
+                $stopStmt->execute();
+            }
+
+            // Log action
+            $logStmt = $conn->prepare("INSERT INTO audit_logs (user_id, action, table_name, record_id) VALUES (?, 'CREATE_TRIP', 'trips', ?)");
+            if ($logStmt) {
+                $logStmt->bind_param("ii", $userId, $newTripId);
+                $logStmt->execute();
+            }
+
+            header("Location: itinerary_builder.php?trip_id={$newTripId}&created=1");
+            exit();
         } else {
-            $message = "Error creating trip: " . $stmt->error;
+            $message = "Error creating journey: " . $stmt->error;
         }
-    } else {
-        $message = "All fields are required (including Country and City).";
     }
 }
 
-// Fetch countries for dropdown
-$sql = "SELECT id, name FROM country ORDER BY name ASC";
-$countries = $conn->query($sql);
+// Fetch countries
+$countries = $conn->query("SELECT id, name, phone_code FROM countries ORDER BY (id = 1) DESC, name ASC");
+
+// Fetch Indian cities
+$cities = $conn->query("SELECT id, name, state FROM cities WHERE country_id = 1 ORDER BY name ASC");
+
+$pageTitle = "Plan a New Journey";
+include 'includes/header.php';
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GlobalTrutter - Create New Trip</title>
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <style>
-        :root {
-            --primary: #31A4FE;
-            --primary-hover: #258ae0;
-            --bg-color: #f0f4f8;
-            --card-bg: #ffffff;
-            --text-main: #1e293b;
-            --text-muted: #64748b;
-            --border-color: #e2e8f0;
-            --error-color: #ef4444;
-            --success-color: #10b981;
-        }
 
-        body {
-            margin: 0;
-            padding: 0;
-            font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #e0f0ff 0%, #ffffff 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-main);
-        }
-
-        .container {
-            width: 100%;
-            max-width: 600px;
-            padding: 20px;
-            box-sizing: border-box;
-        }
-
-        .card {
-            background: var(--card-bg);
-            border-radius: 20px;
-            padding: 40px;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
-            border: 1px solid rgba(255, 255, 255, 0.5);
-            backdrop-filter: blur(10px);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .card-header {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-
-        .card-header h1 {
-            margin: 0 0 10px;
-            font-size: 28px;
-            color: var(--text-main);
-            font-weight: 800;
-            letter-spacing: -0.5px;
-        }
-
-        .card-header p {
-            margin: 0;
-            color: var(--text-muted);
-            font-size: 15px;
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        .form-row {
-            display: flex;
-            gap: 20px;
-        }
-
-        .form-row .form-group {
-            flex: 1;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text-main);
-        }
-
-        input[type="text"],
-        input[type="date"],
-        select,
-        textarea {
-            width: 100%;
-            padding: 12px 16px;
-            border: 1.5px solid var(--border-color);
-            border-radius: 10px;
-            font-size: 15px;
-            color: var(--text-main);
-            background-color: #f8fafc;
-            transition: all 0.3s ease;
-            box-sizing: border-box;
-            font-family: inherit;
-        }
-
-        input[type="text"]:focus,
-        input[type="date"]:focus,
-        select:focus,
-        textarea:focus {
-            outline: none;
-            border-color: var(--primary);
-            background-color: #fff;
-            box-shadow: 0 0 0 4px rgba(49, 164, 254, 0.1);
-        }
-
-        textarea {
-            resize: vertical;
-            min-height: 100px;
-        }
-
-        .submit-btn {
-            width: 100%;
-            padding: 14px;
-            background-color: var(--primary);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: 700;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin-top: 10px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-
-        .submit-btn:hover {
-            background-color: var(--primary-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(49, 164, 254, 0.3);
-        }
-
-        .submit-btn:active {
-            transform: translateY(0);
-        }
-
-        .submit-btn.loading {
-            background-color: var(--primary-hover);
-            pointer-events: none;
-        }
-
-        .spinner {
-            display: none;
-            width: 20px;
-            height: 20px;
-            border: 3px solid rgba(255,255,255,0.3);
-            border-radius: 50%;
-            border-top-color: white;
-            animation: spin 1s ease-in-out infinite;
-            margin-right: 10px;
-        }
-
-        .submit-btn.loading .spinner {
-            display: inline-block;
-        }
-        .submit-btn.loading .btn-text {
-            display: none;
-        }
-        .submit-btn.loading::after {
-            content: 'Creating Trip...';
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        .back-link {
-            display: block;
-            text-align: center;
-            margin-top: 25px;
-            color: var(--text-muted);
-            text-decoration: none;
-            font-size: 14px;
-            font-weight: 500;
-            transition: color 0.3s;
-        }
-
-        .back-link:hover {
-            color: var(--primary);
-        }
-
-        .message {
-            padding: 15px;
-            border-radius: 10px;
-            margin-bottom: 25px;
-            text-align: center;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        
-        .message.success {
-            background-color: rgba(16, 185, 129, 0.1);
-            color: var(--success-color);
-            border: 1px solid rgba(16, 185, 129, 0.2);
-        }
-
-        .message.error {
-            background-color: rgba(239, 68, 68, 0.1);
-            color: var(--error-color);
-            border: 1px solid rgba(239, 68, 68, 0.2);
-        }
-
-        /* Decorative blobs */
-        .blob-1, .blob-2 {
-            position: absolute;
-            border-radius: 50%;
-            filter: blur(40px);
-            z-index: -1;
-            opacity: 0.5;
-        }
-        .blob-1 {
-            width: 300px;
-            height: 300px;
-            background: rgba(49, 164, 254, 0.3);
-            top: -100px;
-            right: -100px;
-        }
-        .blob-2 {
-            width: 250px;
-            height: 250px;
-            background: rgba(226, 232, 240, 0.8);
-            bottom: -80px;
-            left: -80px;
-        }
-    </style>
-</head>
-<body>
-
-    <div class="container">
-        <div class="card">
-            <div class="blob-1"></div>
-            <div class="blob-2"></div>
-            
-            <div class="card-header">
-                <h1>Plan a New Trip</h1>
-                <p>Fill out the details below to start your next adventure</p>
-            </div>
-
-            <?php if ($message): ?>
-                <div class="message <?php echo strpos($message, 'success') !== false ? 'success' : 'error'; ?>">
-                    <?php echo htmlspecialchars($message); ?>
-                </div>
-            <?php endif; ?>
-
-            <form method="POST" action="" id="createTripForm">
-                <div class="form-group">
-                    <label>Trip Name</label>
-                    <input type="text" name="name" placeholder="e.g., Summer in Paris" required>
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Country</label>
-                        <select name="country_id" id="country" required>
-                            <option value="">-- Select Country --</option>
-                            <?php while($row = $countries->fetch_assoc()) { ?>
-                                <option value="<?php echo $row['id']; ?>"><?php echo htmlspecialchars($row['name']); ?></option>
-                            <?php } ?>
-                        </select>
-                    </div>
-
-                    <div class="form-group">
-                        <label>City</label>
-                        <select name="city_id" id="city" required>
-                            <option value="">-- Select City --</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Start Date</label>
-                        <input type="date" name="start_date" required>
-                    </div>
-
-                    <div class="form-group">
-                        <label>End Date</label>
-                        <input type="date" name="end_date" required>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label>Notes (Optional)</label>
-                    <textarea name="notes" placeholder="Any specific plans, flights, or accommodation info..."></textarea>
-                </div>
-
-                <button type="submit" class="submit-btn" id="submitBtn">
-                    <div class="spinner"></div>
-                    <span class="btn-text">Create Trip</span>
-                </button>
-            </form>
-
-            <a href="dashboard.php" class="back-link">← Back to Dashboard</a>
-        </div>
+<div class="main-content">
+  <div class="container container-narrow">
+    
+    <div style="margin-bottom: 2rem;">
+      <a href="dashboard.php" class="text-muted" style="font-size:0.88rem; display:inline-flex; align-items:center; gap:0.35rem; margin-bottom:0.75rem;">
+        ← Back to Dashboard
+      </a>
+      <span class="badge badge-sunset" style="margin-bottom:0.5rem;">Trip Planner Wizard</span>
+      <h1 style="font-size: 2.2rem; font-weight:800;">Plan Your Next Indian Odyssey</h1>
+      <p class="text-muted">Set up your route, travel dates, and initial budget in Indian Rupees (₹).</p>
     </div>
 
-    <script>
-        $(document).ready(function() {
-            // Load cities dynamically based on selected country
-            $('#country').change(function(){
-                var countryId = $(this).val();
-                if(countryId) {
-                    $.ajax({
-                        url: 'get_cities.php',
-                        type: 'POST',
-                        data: {country_id: countryId},
-                        success: function(data) {
-                            $('#city').html(data);
-                        }
-                    });
-                } else {
-                    $('#city').html('<option value="">-- Select City --</option>');
-                }
-            });
+    <?php if (!empty($message)): ?>
+      <div class="alert alert-error">
+        <span>⚠️</span>
+        <span><?php echo htmlspecialchars($message); ?></span>
+      </div>
+    <?php endif; ?>
 
-            // Form submission loading effect
-            $('#createTripForm').on('submit', function() {
-                $('#submitBtn').addClass('loading');
-            });
-        });
-    </script>
-</body>
-</html>
+    <div class="card" style="padding: 2.5rem;">
+      <form method="POST" action="create_trip.php" id="createTripForm">
+        
+        <div class="form-group">
+          <label class="form-label" for="tripName">Trip Title *</label>
+          <input type="text" name="name" id="tripName" placeholder="e.g. Royal Rajasthan Palace Tour or Kerala Backwaters Escape" required>
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.25rem;">
+          <div class="form-group">
+            <label class="form-label" for="countrySelect">Country</label>
+            <select name="country_id" id="countrySelect" required>
+              <?php while ($c = $countries->fetch_assoc()): ?>
+                <option value="<?php echo $c['id']; ?>" <?php echo ($c['id'] == 1) ? 'selected' : ''; ?>>
+                  <?php echo htmlspecialchars($c['name']); ?>
+                </option>
+              <?php endwhile; ?>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="citySelect">Primary Destination</label>
+            <select name="city_id" id="citySelect" required>
+              <option value="" disabled <?php echo !$preselectedCityId ? 'selected' : ''; ?>>-- Select Primary City --</option>
+              <?php while ($city = $cities->fetch_assoc()): ?>
+                <option value="<?php echo $city['id']; ?>" <?php echo ($preselectedCityId == $city['id']) ? 'selected' : ''; ?>>
+                  <?php echo htmlspecialchars($city['name']) . ($city['state'] ? ' (' . htmlspecialchars($city['state']) . ')' : ''); ?>
+                </option>
+              <?php endwhile; ?>
+            </select>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:1.25rem;">
+          <div class="form-group">
+            <label class="form-label" for="startDate">Start Date *</label>
+            <input type="date" name="start_date" id="startDate" value="<?php echo date('Y-m-d', strtotime('+7 days')); ?>" required>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="endDate">End Date *</label>
+            <input type="date" name="end_date" id="endDate" value="<?php echo date('Y-m-d', strtotime('+14 days')); ?>" required>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="totalBudget">Total Budget (₹ INR)</label>
+            <input type="number" name="total_budget" id="totalBudget" placeholder="35000" step="500" value="35000">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="tripDesc">Trip Overview &amp; Highlights</label>
+          <textarea name="description" id="tripDesc" placeholder="Describe the purpose of this trip, companions, key sights to see..." rows="3"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="coverPhoto">Cover Photo URL (Optional)</label>
+          <input type="text" name="cover_photo" id="coverPhoto" placeholder="https://images.unsplash.com/... (leave blank to auto-select)">
+        </div>
+
+        <!-- Quick Cover Image Presets -->
+        <div style="margin-bottom: 2rem;">
+          <label class="form-label" style="margin-bottom: 0.6rem;">Or Pick a High-Res Cover Preset:</label>
+          <div style="display:flex; gap:0.75rem; overflow-x:auto; padding-bottom:0.5rem;">
+            <img src="https://images.unsplash.com/photo-1599661046289-e31897846e41?w=200" alt="Rajasthan" class="card-interactive" style="width:90px; height:60px; object-fit:cover; border-radius:var(--radius-sm); cursor:pointer;" onclick="setCover(this.src)">
+            <img src="https://images.unsplash.com/photo-1581793745862-99fde7fa73d2?w=200" alt="Ladakh" class="card-interactive" style="width:90px; height:60px; object-fit:cover; border-radius:var(--radius-sm); cursor:pointer;" onclick="setCover(this.src)">
+            <img src="https://images.unsplash.com/photo-1602216056096-3b40cc0c9944?w=200" alt="Kerala" class="card-interactive" style="width:90px; height:60px; object-fit:cover; border-radius:var(--radius-sm); cursor:pointer;" onclick="setCover(this.src)">
+            <img src="https://images.unsplash.com/photo-1512343879784-a960bf40e7f2?w=200" alt="Goa" class="card-interactive" style="width:90px; height:60px; object-fit:cover; border-radius:var(--radius-sm); cursor:pointer;" onclick="setCover(this.src)">
+            <img src="https://images.unsplash.com/photo-1561361513-2d000a50f0dc?w=200" alt="Varanasi" class="card-interactive" style="width:90px; height:60px; object-fit:cover; border-radius:var(--radius-sm); cursor:pointer;" onclick="setCover(this.src)">
+            <img src="https://images.unsplash.com/photo-1564507592333-c60657eea523?w=200" alt="Taj Mahal" class="card-interactive" style="width:90px; height:60px; object-fit:cover; border-radius:var(--radius-sm); cursor:pointer;" onclick="setCover(this.src)">
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block btn-lg">
+          <span>Create Journey &amp; Build Itinerary 📝 →</span>
+        </button>
+      </form>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function setCover(url) {
+  document.getElementById('coverPhoto').value = url;
+  Toast.show('Cover photo preset selected! 📸', 'info');
+}
+</script>
+
+<?php include 'includes/footer.php'; ?>
