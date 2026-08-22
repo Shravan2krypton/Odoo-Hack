@@ -24,6 +24,18 @@ const API = {
   post:   (ep, body)   => API.request(ep, 'POST', body),
   put:    (ep, body)   => API.request(ep, 'PUT', body),
   delete: (ep)         => API.request(ep, 'DELETE'),
+
+// Helper to fetch cities for a given country_id
+async function fetchCities(countryId) {
+  if (!countryId) return [];
+  try {
+    const data = await API.get(`get_cities.php?country_id=${countryId}`);
+    return data.cities || [];
+  } catch (e) {
+    console.error('Failed to fetch cities', e);
+    return [];
+  }
+}
 };
 
 // ── Toast Notifications ──────────────────────────────────────
