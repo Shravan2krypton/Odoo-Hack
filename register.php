@@ -56,7 +56,7 @@ $sql = "SELECT id, name, phone_code FROM country ORDER BY name ASC";
 $countries = $conn->query($sql);
 ?>
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <title>Register</title>
     <link rel="stylesheet" href="assets/css/style.css">
@@ -68,55 +68,13 @@ $countries = $conn->query($sql);
         <input type="text" name="first_name" placeholder="First Name" required><br>
         <input type="text" name="last_name" placeholder="Last Name" required><br>
         <input type="email" name="email" placeholder="Email Address" required><br>
-
-        <label>Country:</label>
-        <select name="country_id" id="country" required>
-            <option value="">-- Select Country --</option>
-            <?php while($row = $countries->fetch_assoc()) { ?>
-                <option value="<?php echo $row['id']; ?>" data-code="<?php echo $row['phone_code']; ?>">
-                    <?php echo $row['name']; ?> (+<?php echo $row['phone_code']; ?>)
-                </option>
-            <?php } ?>
-        </select><br>
-
-        <label>City:</label>
-        <select name="city_id" id="city" required>
-            <option value="">-- Select City --</option>
-        </select><br>
-
-        <label>Phone:</label>
-        <div style="display:flex; gap:5px;">
-            <input type="text" id="phone_code" name="phone_code" placeholder="Code" readonly style="width:60px;">
-            <input type="text" id="phone_number" name="phone_number" placeholder="10 digits" maxlength="10" pattern="\d{10}" required>
-        </div><br>
-
+        <input type="text" name="phone" placeholder="Phone Number"><br>
+        <input type="text" name="city" placeholder="City"><br>
+        <input type="text" name="country" placeholder="Country"><br>
         <textarea name="extra_info" placeholder="Additional Information..."></textarea><br>
         <input type="password" name="password" placeholder="Password" required><br>
         <button type="submit">Register</button>
         <p><?php if(isset($error)) echo $error; ?></p>
     </form>
-
-    <script>
-    // Load cities dynamically
-    $('#country').change(function() {
-        var countryId = $(this).val();
-        var phoneCode = $('#country option:selected').data('code');
-        if(phoneCode) {
-            $('#phone_code').val(phoneCode); // auto-fill code box
-        }
-        if(countryId) {
-            $.ajax({
-                url: 'get_cities.php',
-                type: 'POST',
-                data: {country_id: countryId},
-                success: function(data) {
-                    $('#city').html(data);
-                }
-            });
-        } else {
-            $('#city').html('<option value="">-- Select City --</option>');
-        }
-    });
-    </script>
 </body>
 </html>
