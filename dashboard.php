@@ -12,10 +12,10 @@ $user_id = $_SESSION['user_id'];
 
 // Fetch user details with joins for city/country names
 $sqlUser = "SELECT u.first_name, u.last_name, u.email, u.phone, 
-                   c.name AS country_name, ci.name AS city_name, 
+                   co.name AS country_name, ci.name AS city_name, 
                    u.extra_info, u.role
             FROM users u
-            LEFT JOIN country c ON u.country_id = c.id
+            LEFT JOIN country co ON u.country_id = co.id
             LEFT JOIN city ci ON u.city_id = ci.id
             WHERE u.id=?";
 $stmtUser = $conn->prepare($sqlUser);
@@ -23,12 +23,15 @@ $stmtUser->bind_param("i", $user_id);
 $stmtUser->execute();
 $user = $stmtUser->get_result()->fetch_assoc();
 
-// Fetch trips by status
+// Fetch trips by status with joins
 function fetchTrips($conn, $user_id, $status) {
-    $sql = "SELECT id, name, start_date, end_date 
-            FROM trips 
-            WHERE user_id=? AND status=? 
-            ORDER BY start_date DESC";
+    $sql = "SELECT t.id, t.name, t.start_date, t.end_date, 
+                   co.name AS country_name, ci.name AS city_name
+            FROM trips t
+            LEFT JOIN country co ON t.country_id = co.id
+            LEFT JOIN city ci ON t.city_id = ci.id
+            WHERE t.user_id=? AND t.status=? 
+            ORDER BY t.start_date DESC";
     $stmt = $conn->prepare($sql);
     $stmt->bind_param("is", $user_id, $status);
     $stmt->execute();
@@ -39,11 +42,9 @@ $ongoingTrips   = fetchTrips($conn, $user_id, 'ongoing');
 $completedTrips = fetchTrips($conn, $user_id, 'completed');
 ?>
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - GlobalTraveler</title>
+    <title>Dashboard</title>
     <style>
         :root {
             --primary: #31A4FE;
@@ -273,37 +274,19 @@ $completedTrips = fetchTrips($conn, $user_id, 'completed');
     <div class="profile-header">
         <img src="assets/images/user_placeholder.png" alt="User Image" width="100">
         <div class="user-details">
-            <h2><?php echo $user['first_name']." ".$user['last_name']; ?></h2>
-            <p>Email: <?php echo $user['email']; ?></p>
-            <p>Phone: <?php echo $user['phone']; ?></p>
-            <p>City: <?php echo $user['city']; ?></p>
-            <p>Country: <?php echo $user['country']; ?></p>
-            <p>Info: <?php echo $user['extra_info']; ?></p>
+            <h2><?php echo htmlspecialchars($user['first_name']." ".$user['last_name']); ?></h2>
+            <p>Email: <?php echo htmlspecialchars($user['email']); ?></p>
+            <p>Phone: <?php echo htmlspecialchars($user['phone']); ?></p>
+            <p>City: <?php echo htmlspecialchars($user['city_name']); ?></p>
+            <p>Country: <?php echo htmlspecialchars($user['country_name']); ?></p>
+            <p>Info: <?php echo htmlspecialchars($user['extra_info'] ?: 'None'); ?></p>
             <a href="edit_profile.php">Edit Profile</a>
         </div>
     </div>
 
+    <!-- Trip sections -->
     <div class="dashboard-container">
-        <!-- Sidebar / Profile -->
-        <div class="profile-card">
-            <!-- Dynamically load avatar with initials if real image is missing -->
-            <img src="assets/images/user_placeholder.png" alt="User Image" onerror="this.src='https://ui-avatars.com/api/?name=<?php echo urlencode($user['first_name'].' '.$user['last_name']); ?>&background=31A4FE&color=fff'">
-            <h2><?php echo htmlspecialchars($user['first_name']." ".$user['last_name']); ?></h2>
-            <div class="email"><?php echo htmlspecialchars($user['email']); ?></div>
-            
-            <div class="profile-details">
-                <p><strong>Phone:</strong> <?php echo htmlspecialchars($user['phone']); ?></p>
-                <p><strong>City:</strong> <?php echo htmlspecialchars($user['city']); ?></p>
-                <p><strong>Country:</strong> <?php echo htmlspecialchars($user['country']); ?></p>
-                <p><strong>Info:</strong> <?php echo htmlspecialchars($user['extra_info'] ?: 'None'); ?></p>
-            </div>
-            
-            <a href="edit_profile.php" class="edit-profile-btn">Edit Profile</a>
-        </div>
-
-        <!-- Main Content -->
         <div class="content-area">
-            
             <!-- Ongoing Trips -->
             <div class="trip-section">
                 <h3><span style="color: #ff9800;">●</span> Ongoing Trips</h3>
@@ -311,11 +294,10 @@ $completedTrips = fetchTrips($conn, $user_id, 'completed');
                     <div class="trip-grid">
                         <?php while($trip = $ongoingTrips->fetch_assoc()) { ?>
                             <div class="trip-box" style="border-left: 4px solid #ff9800;">
-                                <div>
-                                    <h4 class="trip-name"><?php echo htmlspecialchars($trip['name']); ?></h4>
-                                    <div class="trip-dates"><?php echo htmlspecialchars($trip['start_date'])." - ".htmlspecialchars($trip['end_date']); ?></div>
-                                </div>
-                                <a href="itinerary_view.php?id=<?php echo $trip['id']; ?>" class="view-btn">View Itinerary</a>
+                                <h4 class="trip-name"><?php echo htmlspecialchars($trip['name']); ?></h4>
+                                <div class="trip-dates"><?php echo htmlspecialchars($trip['start_date'])." - ".htmlspecialchars($trip['end_date']); ?></div>
+                                <div class="trip-location"><?php echo htmlspecialchars($trip['city_name']).", ".htmlspecialchars($trip['country_name']); ?></div>
+                                <a href="itinerary_view.php?trip_id=<?php echo $trip['id']; ?>" class="view-btn">View Itinerary</a>
                             </div>
                         <?php } ?>
                     </div>
@@ -331,11 +313,10 @@ $completedTrips = fetchTrips($conn, $user_id, 'completed');
                     <div class="trip-grid">
                         <?php while($trip = $plannedTrips->fetch_assoc()) { ?>
                             <div class="trip-box" style="border-left: 4px solid var(--primary);">
-                                <div>
-                                    <h4 class="trip-name"><?php echo htmlspecialchars($trip['name']); ?></h4>
-                                    <div class="trip-dates"><?php echo htmlspecialchars($trip['start_date'])." - ".htmlspecialchars($trip['end_date']); ?></div>
-                                </div>
-                                <a href="itinerary_view.php?id=<?php echo $trip['id']; ?>" class="view-btn">View Itinerary</a>
+                                <h4 class="trip-name"><?php echo htmlspecialchars($trip['name']); ?></h4>
+                                <div class="trip-dates"><?php echo htmlspecialchars($trip['start_date'])." - ".htmlspecialchars($trip['end_date']); ?></div>
+                                <div class="trip-location"><?php echo htmlspecialchars($trip['city_name']).", ".htmlspecialchars($trip['country_name']); ?></div>
+                                <a href="itinerary_view.php?trip_id=<?php echo $trip['id']; ?>" class="view-btn">View Itinerary</a>
                             </div>
                         <?php } ?>
                     </div>
@@ -351,11 +332,10 @@ $completedTrips = fetchTrips($conn, $user_id, 'completed');
                     <div class="trip-grid">
                         <?php while($trip = $completedTrips->fetch_assoc()) { ?>
                             <div class="trip-box" style="border-left: 4px solid #4caf50; opacity: 0.8;">
-                                <div>
-                                    <h4 class="trip-name"><?php echo htmlspecialchars($trip['name']); ?></h4>
-                                    <div class="trip-dates"><?php echo htmlspecialchars($trip['start_date'])." - ".htmlspecialchars($trip['end_date']); ?></div>
-                                </div>
-                                <a href="itinerary_view.php?id=<?php echo $trip['id']; ?>" class="view-btn">View Itinerary</a>
+                                <h4 class="trip-name"><?php echo htmlspecialchars($trip['name']); ?></h4>
+                                <div class="trip-dates"><?php echo htmlspecialchars($trip['start_date'])." - ".htmlspecialchars($trip['end_date']); ?></div>
+                                <div class="trip-location"><?php echo htmlspecialchars($trip['city_name']).", ".htmlspecialchars($trip['country_name']); ?></div>
+                                <a href="itinerary_view.php?trip_id=<?php echo $trip['id']; ?>" class="view-btn">View Itinerary</a>
                             </div>
                         <?php } ?>
                     </div>
@@ -363,24 +343,7 @@ $completedTrips = fetchTrips($conn, $user_id, 'completed');
                     <div class="empty-state">No completed trips yet.</div>
                 <?php endif; ?>
             </div>
-
         </div>
     </div>
-    
-    <script>
-        // Simple entrance animation on load
-        document.addEventListener("DOMContentLoaded", function() {
-            const boxes = document.querySelectorAll('.trip-box');
-            boxes.forEach((box, index) => {
-                box.style.opacity = '0';
-                box.style.transform = 'translateY(15px)';
-                setTimeout(() => {
-                    box.style.transition = 'all 0.4s ease';
-                    box.style.opacity = '1';
-                    box.style.transform = 'translateY(0)';
-                }, index * 80 + 100);
-            });
-        });
-    </script>
 </body>
 </html>
